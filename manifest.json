@@ -1,0 +1,28 @@
+﻿{
+  "manifest_version": 3,
+  "name": "XTRACTARR",
+  "version": "0.2.0",
+  "description": "XTRACTARR | Sales Navigator extractor with start-controlled capture and JSON/CSV export.",
+  "permissions": ["downloads", "tabs", "scripting"],
+  "host_permissions": ["*://www.linkedin.com/*"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.linkedin.com/sales/*"],
+      "js": ["src/contentScript.v2.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/interceptor.js"],
+      "matches": ["*://www.linkedin.com/*"]
+    }
+  ],
+  "action": {
+    "default_title": "XTRACTARR",
+    "default_popup": "src/popup.html"
+  }
+}

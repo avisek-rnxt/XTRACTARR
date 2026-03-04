@@ -1,0 +1,48 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>XTRACTARR</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <h1>XTRACTARR</h1>
+      <p>Sales Navigator Data Extractor</p>
+    </header>
+
+    <section class="card">
+      <div class="status-row">
+        <span id="statusText">Idle</span>
+        <span id="progressPct">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      <div id="actionText" class="action-text">Action: idle</div>
+
+      <div class="stats">
+        <div><small>Records</small><strong id="recordsCount">0</strong></div>
+        <div><small>Events</small><strong id="eventsCount">0</strong></div>
+        <div><small>Exports</small><strong id="exportsCount">0</strong></div>
+      </div>
+
+      <div class="run-config">
+        <label for="pageLimit">Pages (1-50)</label>
+        <input id="pageLimit" type="number" min="1" max="50" step="1" value="50" />
+      </div>
+
+      <div class="actions">
+        <button id="startBtn" class="btn primary">START EXTRACTION</button>
+        <button id="stopBtn" class="btn muted">Stop</button>
+        <button id="exportBtn" class="btn outline">Export Now</button>
+      </div>
+
+      <p id="hint" class="hint">Open a LinkedIn Sales Navigator page, then click START EXTRACTION.</p>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
