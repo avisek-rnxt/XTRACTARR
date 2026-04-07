@@ -265,6 +265,442 @@ function formatAddedOn(ts) {
   return d.toString().replace(/\sGMT.*$/, '');
 }
 
+// ─── VERIFY CONTACTS FEATURE ────────────────────────────────────────────
+
+const verifyState = {
+  running: false,
+  contacts: [],
+  results: [],
+  current: 0,
+  total: 0,
+  error: null,
+};
+
+function normalizeCompany(name) {
+  if (!name) return '';
+  return name
+    .toLowerCase()
+    .replace(/[.,\-–—]/g, ' ')
+    .replace(/\b(inc\.?|incorporated|llc|ltd\.?|limited|corp\.?|corporation|pvt\.?|private|co\.?|company|group|holdings|technologies|technology|tech|solutions|services|consulting|plc|& co\.?)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function companiesMatch(stored, current) {
+  if (!stored || !current) return { match: false, ratio: 0 };
+  const a = normalizeCompany(stored);
+  const b = normalizeCompany(current);
+  if (!a || !b) return { match: false, ratio: 0 };
+  if (a === b) return { match: true, ratio: 1.0 };
+  // No-space comparison (e.g., "Research NXT" vs "ResearchNXT")
+  if (a.replace(/ /g, '') === b.replace(/ /g, '')) return { match: true, ratio: 0.95 };
+  // Simple similarity ratio (Dice coefficient on bigrams)
+  const bigrams = (s) => { const b = []; for (let i = 0; i < s.length - 1; i++) b.push(s.slice(i, i + 2)); return b; };
+  const bg1 = bigrams(a), bg2 = bigrams(b);
+  const set2 = new Set(bg2);
+  const inter = bg1.filter(b => set2.has(b)).length;
+  const ratio = (2 * inter) / (bg1.length + bg2.length) || 0;
+  return { match: ratio >= 0.8, ratio };
+}
+
+async function doSalesSearch(keywords, csrfToken) {
+  const token = normalizeCsrfToken(csrfToken);
+  const encoded = encodeURIComponent(keywords);
+  const url = `${LINKEDIN_BASE}/sales-api/salesApiPeopleSearch?q=peopleSearchQuery&query=(keywords:${encoded})&count=10&start=0`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'csrf-token': token, 'x-restli-protocol-version': '2.0.0' },
+    credentials: 'include'
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.elements || [];
+}
+
+function matchFromElements(elements, slug, salesNavId, name) {
+  if (elements.length === 0) return null;
+
+  // Priority 1: Match by Sales Nav ID in entityUrn (most accurate for SN links)
+  if (salesNavId) {
+    const key = parseSalesNavKey(salesNavId);
+    const idToMatch = key ? key.profileId : salesNavId;
+    for (const el of elements) {
+      const urn = el.entityUrn || '';
+      if (urn.includes(idToMatch)) return parseSalesElement(el);
+    }
+  }
+
+  // Priority 2: Match by public profile slug (via publicIdentifier or flagshipProfileUrl)
+  if (slug) {
+    const slugLower = slug.toLowerCase();
+    for (const el of elements) {
+      const pubId = (el.publicIdentifier || '').toLowerCase();
+      const flagship = (el.flagshipProfileUrl || '').toLowerCase();
+      if ((pubId && pubId === slugLower) || flagship.includes(`/in/${slugLower}`)) {
+        return parseSalesElement(el);
+      }
+    }
+  }
+
+  // Priority 3: Match by exact name
+  if (name) {
+    const nameLower = name.toLowerCase();
+    for (const el of elements) {
+      const full = (el.fullName || '').toLowerCase();
+      if (full === nameLower) return parseSalesElement(el);
+    }
+  }
+
+  return null;
+}
+
+async function searchPersonByName(name, slug, salesNavId, company, csrfToken) {
+  if (!name || !csrfToken) return null;
+  try {
+    // Attempt 1: Search with name + company
+    console.log('[VERIFYARR] Searching for:', name, 'company:', company, 'slug:', slug);
+    if (company) {
+      const elements = await doSalesSearch(`${name} ${company}`, csrfToken);
+      console.log('[VERIFYARR] Search (name+company) results:', elements.length);
+      const matched = matchFromElements(elements, slug, salesNavId, name);
+      if (matched && matched.company) return matched;
+    }
+
+    // Attempt 2: Search with just name (company may be outdated)
+    const elements = await doSalesSearch(name, csrfToken);
+    console.log('[VERIFYARR] Search (name only) results:', elements.length);
+    const matched = matchFromElements(elements, slug, salesNavId, name);
+    if (matched) return matched;
+
+    // Last resort: first result from name-only search
+    if (elements.length > 0) return parseSalesElement(elements[0]);
+
+    return null;
+  } catch { return null; }
+}
+
+function parseSalesElement(el) {
+  if (!el) return null;
+  const first = el.firstName || '';
+  const last = el.lastName || '';
+  const full = el.fullName || `${first} ${last}`.trim();
+  const headline = el.headline || '';
+  const positions = el.currentPositions || [];
+  const current = positions.length > 0 ? positions[0] : null;
+  let company = current ? (current.companyName || '') : '';
+  let title = current ? (current.title || '') : '';
+  // Fallback: extract company from headline ("Title at Company")
+  if (!company && headline) {
+    const atMatch = headline.match(/\bat\s+(.+)/i);
+    if (atMatch) {
+      company = atMatch[1].trim();
+      if (!title) title = headline.split(/\bat\b/i)[0].trim();
+    }
+  }
+  return { fullName: full, headline, company, title };
+}
+
+function extractSlug(url) {
+  if (!url) return null;
+  const m = url.match(/linkedin\.com\/in\/([^/?#]+)/);
+  return m ? m[1].replace(/\/$/, '') : null;
+}
+
+function extractSalesNavId(url) {
+  if (!url) return null;
+  // Matches /sales/lead/ACwAAA... or /sales/people/ACwAAA...
+  const m = url.match(/linkedin\.com\/sales\/(?:lead|people)\/([^/?#]+)/);
+  return m ? m[1] : null;
+}
+
+// Parse Sales Nav URL parts: "ACwAAA...,NAME_SEARCH,mGwU" → { profileId, authType, authToken }
+function parseSalesNavKey(salesNavId) {
+  if (!salesNavId) return null;
+  const parts = salesNavId.split(',');
+  const key = { profileId: parts[0] };
+  if (parts.length >= 3) {
+    key.authType = parts[1];
+    key.authToken = parts[2];
+  }
+  return key;
+}
+
+const PROFILE_DECORATION = '(entityUrn,firstName,lastName,fullName,headline,flagshipProfileUrl,defaultPosition,positions*(companyName,current,title,companyUrn,startedOn,endedOn))';
+
+// Voyager API: direct profile lookup by /in/ slug
+async function fetchVoyagerProfile(slug, csrfToken) {
+  const token = normalizeCsrfToken(csrfToken);
+  if (!slug || !token) return null;
+
+  const url = `${LINKEDIN_BASE}/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${encodeURIComponent(slug)}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.TopCardSupplementary-167`;
+  try {
+    console.log('[VERIFYARR] Voyager lookup for slug:', slug);
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'csrf-token': token, 'x-restli-protocol-version': '2.0.0' },
+      credentials: 'include'
+    });
+    console.log('[VERIFYARR] Voyager response:', res.status);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const elements = data.elements || [];
+    if (elements.length === 0) return null;
+
+    const profile = elements[0];
+    const fullName = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
+    const headline = profile.headline || '';
+
+    // Extract current position from profileTopPosition
+    let company = '', title = '';
+    const topPositions = profile.profileTopPosition?.elements || [];
+    for (const pos of topPositions) {
+      if (pos.companyName) {
+        company = pos.companyName;
+        title = pos.title || '';
+        break;
+      }
+    }
+
+    // Fallback: extract from headline
+    if (!company && headline) {
+      const atMatch = headline.match(/\bat\s+(.+)/i);
+      if (atMatch) {
+        company = atMatch[1].trim();
+        if (!title) title = headline.split(/\bat\b/i)[0].trim();
+      }
+    }
+
+    return { fullName, headline, company, title };
+  } catch (err) {
+    console.warn('[VERIFYARR] Voyager fetch error:', err);
+    return null;
+  }
+}
+
+async function fetchSalesNavProfile(salesNavId, csrfToken) {
+  // Directly call the Sales Navigator API to get profile data
+  const token = normalizeCsrfToken(csrfToken);
+  if (!salesNavId || !token) return null;
+
+  const key = parseSalesNavKey(salesNavId);
+  if (!key) return null;
+
+  // Build the REST.li key — include authType/authToken if available
+  let keyStr = `profileId:${key.profileId}`;
+  if (key.authType && key.authToken) {
+    keyStr += `,authType:${key.authType},authToken:${key.authToken}`;
+  }
+
+  const encodedDecoration = encodeURIComponent(PROFILE_DECORATION).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const url = `${LINKEDIN_BASE}/sales-api/salesApiProfiles/(${keyStr})?decoration=${encodedDecoration}`;
+  try {
+    console.log('[VERIFYARR] Fetching Sales Nav profile:', key.profileId);
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'csrf-token': token, 'x-restli-protocol-version': '2.0.0' },
+      credentials: 'include'
+    });
+    console.log('[VERIFYARR] Sales Nav profile response:', res.status);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    return parseSalesProfileData(data);
+  } catch (err) {
+    console.warn('[VERIFYARR] Sales Nav profile fetch error:', err);
+    return null;
+  }
+}
+
+// Parse profile API response — uses defaultPosition or positions array
+function parseSalesProfileData(data) {
+  if (!data) return null;
+  const fullName = data.fullName || `${data.firstName || ''} ${data.lastName || ''}`.trim();
+  const headline = data.headline || '';
+  // defaultPosition is the fastest path
+  const dp = data.defaultPosition;
+  if (dp && dp.current && dp.companyName) {
+    return { fullName, headline, company: dp.companyName, title: dp.title || '' };
+  }
+  // Fallback to positions array
+  const positions = data.positions || [];
+  const current = positions.find(p => p.current === true) || positions.find(p => !p.endedOn) || null;
+  return {
+    fullName,
+    headline,
+    company: current ? (current.companyName || '') : '',
+    title: current ? (current.title || '') : '',
+  };
+}
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { result.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseContactsCSV(csvText) {
+  const lines = csvText.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/[_\-]+/g, ' ').trim());
+
+  const colMap = {};
+  const nameAliases = ['name', 'full name', 'fullname', 'contact name'];
+  const companyAliases = ['company', 'company name', 'organization'];
+  const linkedinAliases = ['linkedin', 'linkedin url', 'linkedin link', 'profile url', 'sales nav url', 'sales navigator url'];
+  const emailAliases = ['email', 'email address'];
+
+  headers.forEach((h, i) => {
+    if (nameAliases.includes(h)) colMap.name = i;
+    else if (companyAliases.includes(h)) colMap.company = i;
+    else if (linkedinAliases.includes(h)) colMap.linkedin = i;
+    else if (emailAliases.includes(h)) colMap.email = i;
+  });
+
+  if (colMap.name === undefined || colMap.company === undefined || colMap.linkedin === undefined) {
+    return [];
+  }
+
+  const contacts = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    const name = cols[colMap.name] || '';
+    const company = cols[colMap.company] || '';
+    let linkedin = cols[colMap.linkedin] || '';
+    const email = colMap.email !== undefined ? (cols[colMap.email] || '') : '';
+    if (!name || !linkedin) continue;
+    if (!linkedin.startsWith('http')) linkedin = 'https://' + linkedin;
+    linkedin = linkedin.replace(/\/$/, '');
+    contacts.push({ name, company, linkedin, email });
+  }
+  return contacts;
+}
+
+function verifyResultsToCsv(results) {
+  const headers = ['Name', 'Original Company', 'Email', 'LinkedIn URL', 'Status', 'Current Company', 'Current Title', 'LinkedIn Name', 'Confidence', 'Strategy', 'Fetched Via'];
+  const rows = [headers.join(',')];
+  for (const r of results) {
+    const row = [
+      r.name, r.originalCompany, r.email, r.linkedin,
+      r.status, r.currentCompany, r.currentTitle, r.linkedinName, r.confidence, r.strategy, r.fetchedVia
+    ].map(csvEscape).join(',');
+    rows.push(row);
+  }
+  return rows.join('\n');
+}
+
+async function runVerification(csrfToken) {
+  verifyState.running = true;
+  verifyState.results = [];
+  verifyState.current = 0;
+  verifyState.error = null;
+  const contacts = verifyState.contacts;
+  verifyState.total = contacts.length;
+
+  for (let i = 0; i < contacts.length; i++) {
+    if (!verifyState.running) break;
+    verifyState.current = i + 1;
+    const contact = contacts[i];
+    const slug = extractSlug(contact.linkedin);
+
+    let result = {
+      name: contact.name,
+      originalCompany: contact.company,
+      email: contact.email,
+      linkedin: contact.linkedin,
+      status: 'Unknown',
+      currentCompany: '',
+      currentTitle: '',
+      linkedinName: '',
+      confidence: 'low',
+      fetchedVia: '',
+      strategy: '',
+    };
+
+    const salesNavId = extractSalesNavId(contact.linkedin);
+    let parsed = null;
+
+    // Strategy 1a: Direct Voyager API lookup by /in/ slug (most accurate for /in/ links)
+    if (slug && !salesNavId) {
+      parsed = await fetchVoyagerProfile(slug, csrfToken);
+      if (parsed && parsed.company) {
+        result.fetchedVia = `${LINKEDIN_BASE}/voyager/api/identity/dash/profiles?memberIdentity=${slug}`;
+        result.strategy = '1';
+      }
+    }
+
+    // Strategy 1b: Direct Sales Nav API call (most accurate for SN links)
+    if (!parsed || !parsed.company) {
+      if (salesNavId) {
+        parsed = await fetchSalesNavProfile(salesNavId, csrfToken);
+        if (parsed && parsed.company) {
+          const pKey = parseSalesNavKey(salesNavId);
+          result.fetchedVia = `${LINKEDIN_BASE}/sales-api/salesApiProfiles/(profileId:${pKey ? pKey.profileId : salesNavId})`;
+          result.strategy = '1';
+        }
+      }
+    }
+
+    // Strategy 2: Fallback to Sales Nav name search
+    if (!parsed || !parsed.company) {
+      const searchResult = await searchPersonByName(contact.name, slug, salesNavId, contact.company, csrfToken);
+      if (searchResult) {
+        parsed = searchResult;
+        result.fetchedVia = `${LINKEDIN_BASE}/sales-api/salesApiPeopleSearch (keyword: ${contact.name} ${contact.company})`;
+        result.strategy = '2';
+      }
+    }
+    if (parsed) {
+      result.linkedinName = parsed.fullName;
+      result.currentTitle = parsed.title || parsed.headline;
+      if (parsed.company) {
+        result.currentCompany = parsed.company;
+        const { match, ratio } = companiesMatch(contact.company, parsed.company);
+        if (match) {
+          result.status = 'Still there';
+          result.confidence = ratio > 0.9 ? 'high' : 'low';
+        } else {
+          result.status = 'Moved on';
+          result.confidence = 'high';
+        }
+      }
+    }
+
+    verifyState.results.push(result);
+
+    // Delay between requests (2.5s + random jitter)
+    if (i < contacts.length - 1 && verifyState.running) {
+      await new Promise(r => setTimeout(r, 2500 + Math.random() * 1000));
+    }
+  }
+
+  // Export results
+  if (verifyState.results.length > 0) {
+    const csv = verifyResultsToCsv(verifyState.results);
+    const csvUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
+    const ts = formatTimestamp();
+    await chrome.downloads.download({ url: csvUrl, filename: `contact-verify-${ts}.csv`, saveAs: false, conflictAction: 'uniquify' });
+  }
+
+  verifyState.running = false;
+}
+
+// ─── END VERIFY CONTACTS ────────────────────────────────────────────────
+
 async function fetchCompanyFromLinkedin(companyId, csrfToken) {
   const token = normalizeCsrfToken(csrfToken);
   if (!companyId || !token) return null;
@@ -641,6 +1077,44 @@ async function handlePopupMessage(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ─── Verify contacts messages ───
+  if (message?.type === 'VERIFY_START') {
+    const contacts = parseContactsCSV(message.csvText || '');
+    if (contacts.length === 0) {
+      sendResponse({ ok: false, error: 'No valid contacts found in CSV. Need columns: Name, Company, LinkedIn URL' });
+      return true;
+    }
+    // Get CSRF token from content script cookie
+    const csrfToken = message.csrfToken || '';
+    if (!csrfToken) {
+      sendResponse({ ok: false, error: 'No CSRF token. Open a LinkedIn page first.' });
+      return true;
+    }
+    verifyState.contacts = contacts;
+    runVerification(csrfToken).catch(err => { verifyState.error = String(err); verifyState.running = false; });
+    sendResponse({ ok: true, total: contacts.length });
+    return true;
+  }
+
+  if (message?.type === 'VERIFY_STATUS') {
+    sendResponse({
+      ok: true,
+      running: verifyState.running,
+      current: verifyState.current,
+      total: verifyState.total,
+      results: verifyState.results.length,
+      error: verifyState.error,
+    });
+    return true;
+  }
+
+  if (message?.type === 'VERIFY_STOP') {
+    verifyState.running = false;
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // ─── Extraction messages ───
   if (message?.type === 'XTRACTARR_START' || message?.type === 'XTRACTARR_STOP' || message?.type === 'XTRACTARR_STATUS' || message?.type === 'XTRACTARR_EXPORT_NOW') {
     handlePopupMessage(message).then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
