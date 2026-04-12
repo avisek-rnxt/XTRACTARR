@@ -185,3 +185,39 @@ body {
   font-size: 12px;
   line-height: 1.4;
 }
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.mode-btn {
+  height: 34px;
+  border: none;
+  background: #f0f3ec;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-btn:hover:not(.active) {
+  background: #e4e9de;
+}
+
+input[type="file"] {
+  width: 100%;
+  font-size: 13px;
+  color: var(--ink);
+}

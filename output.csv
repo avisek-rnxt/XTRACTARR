@@ -1,0 +1,5 @@
+Name,Original Company,Email,LinkedIn URL,Status,Current Company,Current Title,LinkedIn Name,Confidence,Strategy,Fetched Via
+Jennifer Anne Goschke,"7-Eleven, Inc.",,https://linkedin.com/in/jennifergoschke,Still there,7-Eleven,,,high,1,https://www.linkedin.com/voyager/api/identity/dash/profiles?memberIdentity=jennifergoschke
+Malahar Pinnelli,"7-Eleven, Inc.",,https://linkedin.com/in/malahar,Moved on,7-Eleven Global Solution Center – India,,,high,1,https://www.linkedin.com/voyager/api/identity/dash/profiles?memberIdentity=malahar
+Jennifer Anne Goschke,"7-Eleven, Inc.",,"https://www.linkedin.com/sales/lead/ACoAAAAZxTYBP25rMVfcwJJuj6TyK73mkx_taRc,name,Raou",Still there,7-Eleven,"Senior Vice President, Shared Services",Jennifer Goschke,high,1,https://www.linkedin.com/sales-api/salesApiProfiles/(profileId:ACoAAAAZxTYBP25rMVfcwJJuj6TyK73mkx_taRc)
+Malahar Pinnelli,"7-Eleven, Inc.",,"https://www.linkedin.com/sales/lead/ACoAAACQh5MB9sI7dthCc2b1WCVLzoCTDABIXUA,name,QDUB",Moved on,7-Eleven Global Solution Center – India,VP & Country Leader,Malahar Pinnelli,high,1,https://www.linkedin.com/sales-api/salesApiProfiles/(profileId:ACoAAACQh5MB9sI7dthCc2b1WCVLzoCTDABIXUA)

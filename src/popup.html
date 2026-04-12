@@ -1,19 +1,26 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>XTRACTARR</title>
+  <title>VERIFYARR</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <main class="app">
     <header class="hero">
-      <h1>XTRACTARR</h1>
+      <h1>VERIFYARR</h1>
       <p>Sales Navigator Data Extractor</p>
     </header>
 
-    <section class="card">
+    <!-- Mode Toggle -->
+    <div class="mode-toggle">
+      <button id="modeExtract" class="mode-btn active">Extract</button>
+      <button id="modeVerify" class="mode-btn">Verify Contacts</button>
+    </div>
+
+    <!-- EXTRACT MODE -->
+    <section id="extractPanel" class="card">
       <div class="status-row">
         <span id="statusText">Idle</span>
         <span id="progressPct">0%</span>
@@ -41,6 +48,39 @@
       </div>
 
       <p id="hint" class="hint">Open a LinkedIn Sales Navigator page, then click START EXTRACTION.</p>
+    </section>
+
+    <!-- VERIFY MODE -->
+    <section id="verifyPanel" class="card" style="display:none;">
+      <div class="status-row">
+        <span id="vStatusText">Ready</span>
+        <span id="vProgressPct">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="vProgressBar" class="progress-bar"></div>
+      </div>
+
+      <div class="stats">
+        <div><small>Processed</small><strong id="vProcessed">0</strong></div>
+        <div><small>Still there</small><strong id="vStill">0</strong></div>
+        <div><small>Moved on</small><strong id="vMoved">0</strong></div>
+      </div>
+
+      <div class="run-config">
+        <div id="csvDropZone" tabindex="0" style="border:2px dashed #555;border-radius:8px;padding:16px 12px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;">
+          <p style="margin:0 0 4px;font-weight:600;">Drop CSV here or click to browse</p>
+          <p class="hint" style="margin:0;font-size:11px;">You can also paste CSV text (Ctrl+V)</p>
+        </div>
+        <input id="csvFile" type="file" accept=".csv" style="display:none;" />
+        <p id="csvInfo" class="hint" style="margin:4px 0 0;">Needs columns: Name, Company, LinkedIn URL</p>
+      </div>
+
+      <div class="actions">
+        <button id="verifyStartBtn" class="btn primary" disabled>START VERIFICATION</button>
+        <button id="verifyStopBtn" class="btn muted" disabled>Stop</button>
+      </div>
+
+      <p id="vHint" class="hint">Upload a CSV file with contacts to verify. Make sure you have a LinkedIn page open.</p>
     </section>
   </main>
   <script src="popup.js"></script>
